@@ -1,5 +1,6 @@
 package com.autocraft.command;
 
+import static com.autocraft.command.CommandHelper.suggestName;
 import com.autocraft.recipe.RecipeManager;
 import com.autocraft.station.StationConfig;
 import com.autocraft.station.StationManager;
@@ -24,9 +25,9 @@ public final class TaskSubCommands {
     public static LiteralArgumentBuilder<FabricClientCommandSource> start(
             TaskExecutor executor, StationManager stationManager, RecipeManager recipeManager) {
         return literal("start")
-                .then(argument("station", StringArgumentType.word())
+                .then(argument("station", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : stationManager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : stationManager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .then(argument("count", IntegerArgumentType.integer(-1))
@@ -48,15 +49,15 @@ public final class TaskSubCommands {
                                     return 1;
                                 }))
                         .executes(ctx -> {
-                            // No count specified → default 64
+                            // No count specified → infinite
                             String stationName = StringArgumentType.getString(ctx, "station");
-                            String error = executor.start(stationName, 64);
+                            String error = executor.start(stationName, -1);
                             if (error != null) {
                                 ctx.getSource().sendError(Text.literal("§c" + error));
                                 return 0;
                             }
                             ctx.getSource().sendFeedback(Text.literal(
-                                    "§aTask started: station='" + stationName + "', target=64 (default)"));
+                                    "§aTask started: station='" + stationName + "', target=infinite (default)"));
                             return 1;
                         }));
     }

@@ -1,10 +1,15 @@
 package com.autocraft.command;
 
+import static com.autocraft.command.CommandHelper.suggestName;
 import com.autocraft.recipe.CraftingRecipe;
+import com.autocraft.recipe.RecipeCapture;
 import com.autocraft.recipe.RecipeManager;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.ingame.CraftingScreen;
+import net.minecraft.screen.CraftingScreenHandler;
 import net.minecraft.text.Text;
 
 import java.util.List;
@@ -21,16 +26,29 @@ public final class RecipeSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> save(RecipeManager manager) {
         return literal("save")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .executes(ctx -> {
-                            // This is a fallback command; the primary save flow is via
-                            // the crafting table GUI button which auto-names recipes.
-                            // This command expects a recipe was just captured in a buffer,
-                            // or the player can use it to rename via overwrite.
                             String name = StringArgumentType.getString(ctx, "name");
-                            ctx.getSource().sendFeedback(Text.literal(
-                                    "§eUse the crafting table button (💾 +) to save a recipe directly. " +
-                                            "Use §e/autocraft recipe overwrite " + name + "§e to rename."));
+                            // Capture recipe from current crafting screen
+                            var client = MinecraftClient.getInstance();
+                            if (!(client.currentScreen instanceof CraftingScreen screen)) {
+                                ctx.getSource().sendError(Text.literal("§cOpen a crafting table first."));
+                                return 0;
+                            }
+                            CraftingScreenHandler handler = screen.getScreenHandler();
+                            CraftingRecipe recipe = RecipeCapture.capture(handler);
+                            if (recipe == null) {
+                                ctx.getSource().sendError(Text.literal("§cNo items in crafting grid."));
+                                return 0;
+                            }
+                            recipe.setName(name);
+                            if (manager.getByName(name) != null) {
+                                manager.overwrite(recipe);
+                                ctx.getSource().sendFeedback(Text.literal("§aRecipe '" + name + "' overwritten."));
+                            } else {
+                                manager.save(recipe);
+                                ctx.getSource().sendFeedback(Text.literal("§aRecipe '" + name + "' saved."));
+                            }
                             return 1;
                         }));
     }
@@ -55,10 +73,10 @@ public final class RecipeSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> show(RecipeManager manager) {
         return literal("show")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
                             for (CraftingRecipe r : manager.getAll()) {
-                                builder.suggest(r.getName());
+                                builder.suggest(suggestName(r.getName()));
                             }
                             return builder.buildFuture();
                         })
@@ -89,10 +107,10 @@ public final class RecipeSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> delete(RecipeManager manager) {
         return literal("delete")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
                             for (CraftingRecipe r : manager.getAll()) {
-                                builder.suggest(r.getName());
+                                builder.suggest(suggestName(r.getName()));
                             }
                             return builder.buildFuture();
                         })
@@ -109,20 +127,26 @@ public final class RecipeSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> overwrite(RecipeManager manager) {
         return literal("overwrite")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (CraftingRecipe r : manager.getAll()) {
-                                builder.suggest(r.getName());
-                            }
+                            for (CraftingRecipe r : manager.getAll()) builder.suggest(suggestName(r.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
-                            // Rename support: the player can rename a recipe using overwrite
-                            // This is a placeholder for the rename workflow.
                             String name = StringArgumentType.getString(ctx, "name");
-                            ctx.getSource().sendFeedback(Text.literal(
-                                    "§eTo overwrite/rename, re-save from a crafting table then use: " +
-                                            "§e/autocraft recipe overwrite " + name));
+                            var client = MinecraftClient.getInstance();
+                            if (!(client.currentScreen instanceof CraftingScreen screen)) {
+                                ctx.getSource().sendError(Text.literal("§cOpen a crafting table first."));
+                                return 0;
+                            }
+                            CraftingRecipe recipe = RecipeCapture.capture(screen.getScreenHandler());
+                            if (recipe == null) {
+                                ctx.getSource().sendError(Text.literal("§cNo items in crafting grid."));
+                                return 0;
+                            }
+                            recipe.setName(name);
+                            manager.overwrite(recipe);
+                            ctx.getSource().sendFeedback(Text.literal("§aRecipe '" + name + "' overwritten."));
                             return 1;
                         }));
     }

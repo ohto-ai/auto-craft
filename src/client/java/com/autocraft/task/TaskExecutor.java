@@ -20,9 +20,7 @@ public class TaskExecutor {
     private final StationManager stationManager;
 
     private CraftingTask activeTask;
-    private final TaskState idleState = new IdleState();
-    private final TaskState pausedState = new PausedState();
-    private final TaskState stoppedState = new StoppedState();
+    private boolean reported;
 
     // Flag to track if space was pressed for pause toggle
     private boolean spacePressedLastTick;
@@ -62,7 +60,8 @@ public class TaskExecutor {
         }
 
         activeTask = new CraftingTask(station, recipe, targetCount);
-        activeTask.transitionTo(idleState);
+        activeTask.transitionTo(new IdleState());
+        reported = false;
 
         AutoCraftMod.LOGGER.info("Task started: station={}, recipe={}, target={}",
                 stationName, recipe.getName(), targetCount < 0 ? "infinite" : targetCount);
@@ -121,13 +120,15 @@ public class TaskExecutor {
         handleSpaceKey();
 
         if (activeTask.isStopped()) {
-            stoppedState.tick(activeTask);
+            if (!reported) {
+                TaskReport.send(activeTask);
+                reported = true;
+            }
             return;
         }
 
         if (activeTask.isPaused()) {
-            pausedState.tick(activeTask);
-            return;
+            return; // paused, do nothing
         }
 
         // Delegate to current state

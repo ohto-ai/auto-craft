@@ -1,7 +1,6 @@
 package com.autocraft.overlay;
 
 import com.autocraft.AutoCraftMod;
-import com.autocraft.recipe.CraftingRecipe;
 import com.autocraft.station.StationConfig;
 import com.autocraft.task.CraftingTask;
 import com.autocraft.task.MaterialPlanner;
@@ -10,228 +9,180 @@ import com.autocraft.task.TaskExecutor;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.render.RenderLayer;
 import net.minecraft.util.math.BlockPos;
 
 /**
- * Renders the semi-transparent HUD overlay during active crafting tasks.
- * Blocks player input while visible (input blocking is handled by OverlayInputHandler).
+ * Semi-transparent HUD overlay shown during crafting tasks.
+ * When a task stops, fades out over 5 seconds then disappears.
  */
 public class CraftingOverlay {
 
     private final TaskExecutor taskExecutor;
+    private long stoppedAt;
+    private float fadeAlpha = 1f;
 
     private static final int PANEL_X = 10;
     private static final int PANEL_Y = 10;
     private static final int PANEL_WIDTH = 280;
     private static final int LINE_HEIGHT = 12;
     private static final int PADDING = 8;
+    private static final long FADE_MS = 5000;
 
     public CraftingOverlay(TaskExecutor taskExecutor) {
         this.taskExecutor = taskExecutor;
     }
 
-    /**
-     * Main render call from HudRenderCallback.
-     */
     public void render(DrawContext context) {
         CraftingTask task = taskExecutor.getActiveTask();
         if (task == null) return;
+
+        // Calculate fade: running → full, stopped → fade out
+        if (task.isStopped()) {
+            if (stoppedAt == 0) stoppedAt = System.currentTimeMillis();
+            long elapsed = System.currentTimeMillis() - stoppedAt;
+            if (elapsed >= FADE_MS) return; // fully faded
+            fadeAlpha = 1f - (float) elapsed / FADE_MS;
+        } else {
+            stoppedAt = 0;
+            fadeAlpha = 1f;
+        }
 
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
         if (textRenderer == null) return;
 
-        int panelHeight = calculatePanelHeight(task);
-        float opacity = AutoCraftMod.getInstance().getConfig().getOverlayOpacity();
-        int bgColor = ((int)(opacity * 255) << 24); // ARGB: alpha only
+        int panelHeight = calcHeight(task);
+        int bgAlpha = (int) (fadeAlpha * 100);
+        int bgColor = bgAlpha << 24;
 
-        // Draw semi-transparent background
+        // Background
         context.fill(PANEL_X, PANEL_Y, PANEL_X + PANEL_WIDTH, PANEL_Y + panelHeight, bgColor);
 
         int y = PANEL_Y + PADDING;
         int x = PANEL_X + PADDING;
-        int white = 0xFFFFFFFF;
-        int gray = 0xFFAAAAAA;
-        int green = 0xFF55FF55;
-        int yellow = 0xFFFFFF55;
-        int red = 0xFFFF5555;
-        int cyan = 0xFF55FFFF;
+        int white = argb(fadeAlpha, 255, 255, 255);
+        int gray  = argb(fadeAlpha, 170, 170, 170);
+        int green = argb(fadeAlpha, 85, 255, 85);
+        int yellow= argb(fadeAlpha, 255, 255, 85);
+        int red   = argb(fadeAlpha, 255, 85, 85);
+        int cyan  = argb(fadeAlpha, 85, 255, 255);
 
-        // --- Header: Status + Recipe ---
-        String statusText = getStatusText(task);
-        int statusColor = getStatusColor(task);
-        String header = "AutoCraft [" + statusText + "]";
-        context.drawText(textRenderer, header, x, y, statusColor, true);
+        // Header
+        String statusText = task.isStopped() ? "STOPPED" : task.isPaused() ? "PAUSED" : "RUNNING";
+        int statusColor = task.isStopped() ? red : task.isPaused() ? yellow : green;
+        context.drawText(textRenderer, "AutoCraft [" + statusText + "]", x, y, statusColor, true);
         y += LINE_HEIGHT + 2;
 
-        // Recipe name
-        String recipeText = "Recipe: " + task.getRecipe().getName();
-        context.drawText(textRenderer, recipeText, x, y, cyan, true);
+        context.drawText(textRenderer, "Recipe: " + task.getRecipe().getName(), x, y, cyan, true);
         y += LINE_HEIGHT;
 
-        // --- Progress ---
-        String progress;
-        if (task.isInfinite()) {
-            progress = "Progress: " + task.getCompletedCount() + " (infinite)";
-        } else {
-            progress = "Progress: " + task.getCompletedCount() + " / " + task.getTargetCount();
-        }
+        // Progress
+        String progress = task.isInfinite()
+                ? "Progress: " + task.getCompletedCount() + " (infinite)"
+                : "Progress: " + task.getCompletedCount() + " / " + task.getTargetCount();
         context.drawText(textRenderer, progress, x, y, white, true);
         y += LINE_HEIGHT;
 
-        // Progress bar
         double frac = task.getProgressFraction();
-        if (frac >= 0) {
-            int barWidth = PANEL_WIDTH - 2 * PADDING;
-            int barHeight = 6;
-            context.fill(x, y, x + barWidth, y + barHeight, 0xFF333333);
-            if (frac > 0) {
-                int filledWidth = (int)(barWidth * frac);
-                context.fill(x, y, x + filledWidth, y + barHeight, 0xFF00AA00);
-            }
-            y += barHeight + 4;
+        if (frac >= 0 && !task.isInfinite()) {
+            int barW = PANEL_WIDTH - 2 * PADDING;
+            context.fill(x, y, x + barW, y + 6, 0xFF333333);
+            if (frac > 0) context.fill(x, y, x + (int)(barW * frac), y + 6, 0xFF00AA00);
+            y += 10;
         }
 
-        // --- Current step ---
-        String stepText = "Step: " + (task.getCurrentState() != null
-                ? task.getCurrentState().getDescription() : "N/A");
-        context.drawText(textRenderer, stepText, x, y, white, true);
+        String step = "Step: " + (task.getCurrentState() != null ? task.getCurrentState().getDescription() : "N/A");
+        context.drawText(textRenderer, step, x, y, white, true);
         y += LINE_HEIGHT + 2;
 
-        // --- Separator ---
-        context.drawText(textRenderer, "§7─────────────────────────", x, y, gray, true);
+        // Divider
+        context.drawText(textRenderer, "------------------------------", x, y, gray, true);
         y += LINE_HEIGHT;
 
-        // --- Input container status ---
+        // Input container statuses
         StationConfig station = task.getStation();
         for (int i = 0; i < station.getInputs().size(); i++) {
-            BlockPos input = station.getInputs().get(i);
-            RetryTracker tracker = task.getRetryTrackers().get(input);
-
-            int inputColor = green;
-            String status = "OK";
+            BlockPos pos = station.getInputs().get(i);
+            RetryTracker tracker = task.getRetryTrackers().get(pos);
+            int col = green;
+            String s = "OK";
             if (tracker != null && tracker.isActive()) {
-                inputColor = yellow;
-                status = "WAIT " + tracker.getRemainingSeconds() + "s";
-                if (tracker.isTimedOut()) {
-                    inputColor = red;
-                    status = "TIMEOUT";
-                }
+                col = yellow;
+                s = "WAIT " + tracker.getRemainingSeconds() + "s";
+                if (tracker.isTimedOut()) { col = red; s = "TIMEOUT"; }
             }
-
-            String inputText = "Input #" + i + " " + input.toShortString() + " [" + status + "]";
-            context.drawText(textRenderer, inputText, x, y, inputColor, true);
+            context.drawText(textRenderer, "Input #" + i + " " + pos.toShortString() + " [" + s + "]", x, y, col, true);
             y += LINE_HEIGHT;
         }
 
-        // --- Output container status ---
-        BlockPos output = station.getOutput();
-        if (output != null) {
-            RetryTracker tracker = task.getRetryTrackers().get(output);
-            int outputColor = green;
-            String outputStatus = "OK";
+        // Output status
+        BlockPos out = station.getOutput();
+        if (out != null) {
+            RetryTracker tracker = task.getRetryTrackers().get(out);
+            int col = green;
+            String s = "OK";
             if (tracker != null && tracker.isActive()) {
-                outputColor = yellow;
-                outputStatus = "FULL/WAIT " + tracker.getRemainingSeconds() + "s";
-                if (tracker.isTimedOut()) {
-                    outputColor = red;
-                    outputStatus = "TIMEOUT";
-                }
+                col = yellow;
+                s = "FULL/WAIT " + tracker.getRemainingSeconds() + "s";
+                if (tracker.isTimedOut()) { col = red; s = "TIMEOUT"; }
             }
-            String outputText = "Output " + output.toShortString() + " [" + outputStatus + "]";
-            context.drawText(textRenderer, outputText, x, y, outputColor, true);
+            context.drawText(textRenderer, "Output " + out.toShortString() + " [" + s + "]", x, y, col, true);
             y += LINE_HEIGHT;
         }
 
-        // --- Material plan ---
+        // Materials needed
         MaterialPlanner.MaterialPlan plan = task.getCurrentMaterialPlan();
         if (plan != null && !plan.needFromContainers.isEmpty()) {
-            context.drawText(textRenderer, "§7─────────────────────────", x, y, gray, true);
+            context.drawText(textRenderer, "------------------------------", x, y, gray, true);
             y += LINE_HEIGHT;
-            context.drawText(textRenderer, "Needed from containers:", x, y, gray, true);
+            context.drawText(textRenderer, "Needed:", x, y, gray, true);
             y += LINE_HEIGHT;
-            for (var entry : plan.needFromContainers.entrySet()) {
-                // Truncate "minecraft:" prefix for display
-                String itemName = entry.getKey().replace("minecraft:", "");
-                String line = "  " + itemName + " x" + entry.getValue();
-                context.drawText(textRenderer, line, x, y, white, true);
+            for (var e : plan.needFromContainers.entrySet()) {
+                context.drawText(textRenderer, "  " + e.getKey().replace("minecraft:", "") + " x" + e.getValue(), x, y, white, true);
                 y += LINE_HEIGHT;
             }
         }
 
-        // --- Retry / ETA ---
-        context.drawText(textRenderer, "§7─────────────────────────", x, y, gray, true);
+        // Footer
+        context.drawText(textRenderer, "------------------------------", x, y, gray, true);
         y += LINE_HEIGHT;
-
-        // ETA
         if (!task.isInfinite() && task.getCompletedCount() > 0) {
             long elapsed = System.currentTimeMillis() - task.getStartTimeMs();
-            double rate = (double) task.getCompletedCount() / Math.max(1, elapsed);
-            long remaining = (long)((task.getTargetCount() - task.getCompletedCount()) / Math.max(0.001, rate));
-            String eta = "ETA: " + formatDuration(remaining);
-            context.drawText(textRenderer, eta, x, y, white, true);
+            double rate = task.getCompletedCount() / Math.max(1.0, elapsed);
+            long remain = (long)((task.getTargetCount() - task.getCompletedCount()) / Math.max(0.001, rate));
+            context.drawText(textRenderer, "ETA: " + fmtDuration(remain), x, y, white, true);
             y += LINE_HEIGHT;
         }
-
-        // Controls
-        if (task.isPaused()) {
-            context.drawText(textRenderer, "§e[SPACE] Resume", x, y, yellow, true);
-        } else if (task.isStopped()) {
+        if (task.isStopped()) {
             String reason = task.getStopReason();
-            if (reason != null && reason.length() > 50) reason = reason.substring(0, 47) + "...";
-            context.drawText(textRenderer, "§cSTOPPED: " + reason, x, y, red, true);
+            if (reason != null && reason.length() > 45) reason = reason.substring(0, 42) + "...";
+            context.drawText(textRenderer, "STOPPED: " + reason, x, y, red, true);
             y += LINE_HEIGHT;
-            context.drawText(textRenderer, "§7Use /autocraft task start to restart", x, y, gray, true);
+            context.drawText(textRenderer, "Use /autocraft task start to restart", x, y, gray, true);
         } else {
-            context.drawText(textRenderer, "§7[SPACE] Pause  [ESC] Menu", x, y, gray, true);
+            context.drawText(textRenderer, task.isPaused() ? "[SPACE] Resume" : "[SPACE] Pause", x, y, gray, true);
         }
     }
 
-    private int calculatePanelHeight(CraftingTask task) {
-        int height = PADDING * 2; // padding top + bottom
-        height += LINE_HEIGHT * 2 + 2; // header + recipe
-        height += LINE_HEIGHT * 2 + 4; // progress text + bar
-        height += LINE_HEIGHT + 2; // step
-        height += LINE_HEIGHT; // separator
-
-        // Input status lines
-        height += LINE_HEIGHT * Math.max(1, task.getStation().getInputs().size());
-
-        // Output status
-        height += LINE_HEIGHT;
-
-        // Material plan (if any)
-        MaterialPlanner.MaterialPlan plan = task.getCurrentMaterialPlan();
-        if (plan != null && !plan.needFromContainers.isEmpty()) {
-            height += LINE_HEIGHT * 2; // separator + header
-            height += LINE_HEIGHT * plan.needFromContainers.size();
-        }
-
-        // Bottom section
-        height += LINE_HEIGHT * 3; // separator + ETA + controls
-
-        return Math.min(height, 400); // cap at reasonable height
+    private int calcHeight(CraftingTask task) {
+        int h = PADDING * 2 + LINE_HEIGHT * 5 + 2 + 10;
+        h += LINE_HEIGHT * Math.max(1, task.getStation().getInputs().size());
+        h += LINE_HEIGHT;
+        var plan = task.getCurrentMaterialPlan();
+        if (plan != null && !plan.needFromContainers.isEmpty())
+            h += LINE_HEIGHT * (2 + plan.needFromContainers.size());
+        h += LINE_HEIGHT * 3;
+        return Math.min(h, 400);
     }
 
-    private String getStatusText(CraftingTask task) {
-        if (task.isStopped()) return "STOPPED";
-        if (task.isPaused()) return "PAUSED";
-        return "RUNNING";
+    private static int argb(float a, int r, int g, int b) {
+        return ((int)(a * 255) << 24) | (r << 16) | (g << 8) | b;
     }
 
-    private int getStatusColor(CraftingTask task) {
-        if (task.isStopped()) return 0xFFFF5555;
-        if (task.isPaused()) return 0xFFFFFF55;
-        return 0xFF55FF55;
-    }
-
-    private String formatDuration(long millis) {
-        if (millis <= 0) return "calculating...";
-        long seconds = millis / 1000;
-        if (seconds < 60) return seconds + "s";
-        long minutes = seconds / 60;
-        seconds = seconds % 60;
-        return minutes + "m " + seconds + "s";
+    private static String fmtDuration(long ms) {
+        if (ms <= 0) return "...";
+        long s = ms / 1000;
+        if (s < 60) return s + "s";
+        return (s / 60) + "m " + (s % 60) + "s";
     }
 }

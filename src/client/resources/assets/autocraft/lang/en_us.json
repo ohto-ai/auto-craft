@@ -46,5 +46,8 @@
   "text.autocraft.overlay.status_full": "§cFULL",
   "text.autocraft.overlay.space_pause": "SPACE to pause",
   "text.autocraft.overlay.space_resume": "SPACE to resume",
-  "text.autocraft.overlay.stop_reason": "Reason: %s"
+  "text.autocraft.overlay.stop_reason": "Reason: %s",
+
+  "key.autocraft.toggle_overlay": "Toggle Crafting Overlay",
+  "category.autocraft.general": "AutoCraft"
 }

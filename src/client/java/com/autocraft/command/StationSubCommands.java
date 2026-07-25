@@ -1,5 +1,6 @@
 package com.autocraft.command;
 
+import static com.autocraft.command.CommandHelper.suggestName;
 import com.autocraft.AutoCraftMod;
 import com.autocraft.recipe.CraftingRecipe;
 import com.autocraft.recipe.RecipeManager;
@@ -26,7 +27,7 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> create(StationManager manager) {
         return literal("create")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .executes(ctx -> {
                             String name = StringArgumentType.getString(ctx, "name");
                             if (manager.create(name)) {
@@ -46,9 +47,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> delete(StationManager manager) {
         return literal("delete")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -83,9 +84,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> show(StationManager manager) {
         return literal("show")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -112,9 +113,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> setWorkbench(StationManager manager) {
         return literal("set-workbench")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -139,9 +140,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> addInput(StationManager manager) {
         return literal("add-input")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -167,9 +168,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> removeInput(StationManager manager) {
         return literal("remove-input")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .then(argument("index", IntegerArgumentType.integer(0))
@@ -196,9 +197,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> setOutput(StationManager manager) {
         return literal("set-output")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -223,9 +224,9 @@ public final class StationSubCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> highlight(StationManager manager) {
         return literal("highlight")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : manager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : manager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
                         .executes(ctx -> {
@@ -251,14 +252,14 @@ public final class StationSubCommands {
     public static LiteralArgumentBuilder<FabricClientCommandSource> bindRecipe(
             StationManager stationManager, RecipeManager recipeManager) {
         return literal("bind-recipe")
-                .then(argument("name", StringArgumentType.word())
+                .then(argument("name", StringArgumentType.string())
                         .suggests((ctx, builder) -> {
-                            for (StationConfig s : stationManager.getAll()) builder.suggest(s.getName());
+                            for (StationConfig s : stationManager.getAll()) builder.suggest(suggestName(s.getName()));
                             return builder.buildFuture();
                         })
-                        .then(argument("recipe", StringArgumentType.word())
+                        .then(argument("recipe", StringArgumentType.string())
                                 .suggests((ctx, builder) -> {
-                                    for (CraftingRecipe r : recipeManager.getAll()) builder.suggest(r.getName());
+                                    for (CraftingRecipe r : recipeManager.getAll()) builder.suggest(suggestName(r.getName()));
                                     return builder.buildFuture();
                                 })
                                 .executes(ctx -> {

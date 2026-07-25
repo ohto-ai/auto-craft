@@ -21,7 +21,7 @@ public class NavigateToInputState implements TaskState {
     @Override public StateResult tick(CraftingTask ctx) {
         var inputs = ctx.getStation().getInputs();
         int idx = ctx.getCurrentInputIndex();
-        if (idx >= inputs.size()) { ctx.transitionTo(new NavigateToWorkbenchState()); return StateResult.SUCCESS; }
+        if (idx >= inputs.size()) { ctx.transitionTo(new TakeMaterialsState()); return StateResult.SUCCESS; }
         BlockPos target = inputs.get(idx);
         if (isWithinReach(target)) { ctx.transitionTo(new TakeMaterialsState()); return StateResult.SUCCESS; }
         NavigationProvider.Result r = nav.tick();

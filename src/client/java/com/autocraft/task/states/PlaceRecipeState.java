@@ -61,42 +61,12 @@ public class PlaceRecipeState implements TaskState {
             case PREPARE: {
                 MaterialPlanner.MaterialPlan plan = ctx.getCurrentMaterialPlan();
                 int batch = plan != null ? plan.batchSize : 1;
-                ScreenHandler handler = client.player.currentScreenHandler;
-
-                // Calculate needed per slot
                 needed = new int[9];
-                Map<String, Integer> totalNeededByType = new HashMap<>();
                 for (int i = 0; i < 9; i++) {
                     CraftingRecipe.GridEntry e = ctx.getRecipe().getSlot(i);
-                    if (e != null) {
-                        int n = Math.min(MAX_PER_SLOT, e.count * batch);
-                        needed[i] = n;
-                        totalNeededByType.merge(e.itemId, n, Integer::sum);
-                    }
+                    if (e != null) needed[i] = Math.min(MAX_PER_SLOT, e.count * batch);
                 }
-
-                // Verify inventory has enough
-                Map<String, Integer> available = new HashMap<>();
-                for (int i = 10; i < handler.slots.size(); i++) {
-                    ItemStack s = handler.slots.get(i).getStack();
-                    if (!s.isEmpty()) {
-                        String id = Registries.ITEM.getId(s.getItem()).toString();
-                        available.merge(id, s.getCount(), Integer::sum);
-                    }
-                }
-
-                for (var entry : totalNeededByType.entrySet()) {
-                    int have = available.getOrDefault(entry.getKey(), 0);
-                    if (have < entry.getValue()) {
-                        AutoCraftMod.LOGGER.warn("Not enough {} in inventory: have {}, need {}. Re-planning.",
-                                entry.getKey(), have, entry.getValue());
-                        ContainerInteractor.closeContainer();
-                        ctx.transitionTo(new PlanningState());
-                        return StateResult.SUCCESS;
-                    }
-                }
-
-                AutoCraftMod.LOGGER.info("Placing batch of {} crafts: {}", batch, totalNeededByType);
+                AutoCraftMod.LOGGER.info("Placing batch of {} crafts", batch);
                 phase = Phase.PLACING;
                 gridIdx = 0;
                 subPhase = 0;

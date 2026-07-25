@@ -24,17 +24,16 @@ import java.util.*;
  */
 public class TakeMaterialsState implements TaskState {
 
-    private enum Phase { ENTER, OPENING, GRAB, CHECK, NEXT, DONE }
+    private enum Phase { ENTER, OPENING, GRAB, CHECK, NEXT, DONE, WAIT_RETRY }
     private Phase phase;
     private int tickInPhase;
-    private final List<String> needList = new ArrayList<>(); // item IDs still needed
-    private int grabIdx; // index into needList
+    private final List<String> needList = new ArrayList<>();
+    private int retryWaitTicks; // how many ticks to wait before retrying
 
     @Override public void enter(CraftingTask ctx) {
         phase = Phase.ENTER;
         tickInPhase = 0;
         needList.clear();
-        grabIdx = 0;
     }
 
     @Override public StateResult tick(CraftingTask ctx) {
@@ -68,8 +67,7 @@ public class TakeMaterialsState implements TaskState {
                 if (ContainerInteractor.isContainerOpen()) {
                     AutoCraftMod.LOGGER.info("Container #{} opened, scanning...", idx);
                     phase = Phase.GRAB;
-                    grabIdx = 0;
-                    tickInPhase = 0;
+                                tickInPhase = 0;
                     return StateResult.RUNNING;
                 }
                 if (tickInPhase > 40) {
@@ -149,6 +147,15 @@ public class TakeMaterialsState implements TaskState {
                 }
                 return StateResult.RUNNING;
 
+            case WAIT_RETRY:
+                // Wait ~2 seconds between retry cycles
+                if (tickInPhase > 40) {
+                    ctx.setCurrentInputIndex(0);
+                    ctx.transitionTo(new NavigateToInputState());
+                    return StateResult.SUCCESS;
+                }
+                return StateResult.RUNNING;
+
             case DONE:
                 return StateResult.SUCCESS;
         }
@@ -164,14 +171,16 @@ public class TakeMaterialsState implements TaskState {
             if (!tracker.isActive()) tracker.start();
             tracker.recordCheck();
             if (tracker.isTimedOut()) {
-                ctx.stop("Materials exhausted — timeout");
+                ctx.stop("Materials exhausted after 30s timeout");
                 return StateResult.STOPPED;
             }
         }
-        ctx.setCurrentInputIndex(0);
-        AutoCraftMod.LOGGER.info("Looping back to first input container for retry");
-        ctx.transitionTo(new NavigateToInputState());
-        return StateResult.SUCCESS;
+        // Wait before retrying
+        AutoCraftMod.LOGGER.info("All containers checked — waiting 2s before retry (check {})",
+                last != null ? ctx.getOrCreateRetryTracker(last).getCheckCount() : 0);
+        phase = Phase.WAIT_RETRY;
+        tickInPhase = 0;
+        return StateResult.RUNNING;
     }
 
     @Override public void exit(CraftingTask ctx) {
