@@ -1,0 +1,32 @@
+{
+    "schemaVersion": 1,
+    "id": "auto-craft",
+    "version": "${version}",
+    "name": "AutoCraft",
+    "description": "Client-side automation mod for vanilla crafting table operations on redstone crafting stations.",
+    "authors": ["OhtoAi"],
+    "contact": {},
+    "license": "MIT",
+    "icon": "assets/autocraft/icon.png",
+    "environment": "client",
+    "entrypoints": {
+        "client": [
+            "com.autocraft.AutoCraftMod"
+        ]
+    },
+    "mixins": [
+        {
+            "config": "autocraft.client.mixins.json",
+            "environment": "client"
+        }
+    ],
+    "depends": {
+        "fabricloader": ">=0.16.10",
+        "minecraft": ">=1.20.6",
+        "java": ">=21",
+        "fabric-api": "*"
+    },
+    "suggests": {
+        "baritone": "*"
+    }
+}
