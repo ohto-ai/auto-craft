@@ -60,6 +60,7 @@ public class TakeMaterialsState implements TaskState {
                 AutoCraftMod.LOGGER.info("Need {} types from containers: {}", needList.size(), needList);
                 phase = Phase.OPENING;
                 tickInPhase = 0;
+                retryWaitTicks = 0;
                 ContainerInteractor.openContainer(inputs.get(idx));
                 return StateResult.RUNNING;
 
@@ -67,11 +68,19 @@ public class TakeMaterialsState implements TaskState {
                 if (ContainerInteractor.isContainerOpen()) {
                     AutoCraftMod.LOGGER.info("Container #{} opened, scanning...", idx);
                     phase = Phase.GRAB;
-                                tickInPhase = 0;
+                    tickInPhase = 0;
                     return StateResult.RUNNING;
                 }
                 if (tickInPhase > 40) {
-                    AutoCraftMod.LOGGER.warn("Container #{} not opening, retrying...", idx);
+                    // Retry up to 3 times (6s total), then skip this container
+                    if (retryWaitTicks++ >= 3) {
+                        AutoCraftMod.LOGGER.warn("Container #{} won't open after {} retries — skipping", idx, retryWaitTicks);
+                        retryWaitTicks = 0;
+                        phase = Phase.NEXT;
+                        tickInPhase = 0;
+                        return StateResult.RUNNING;
+                    }
+                    AutoCraftMod.LOGGER.warn("Container #{} not opening, retry {}/3...", idx, retryWaitTicks);
                     ContainerInteractor.openContainer(inputs.get(idx));
                     tickInPhase = 0;
                 }

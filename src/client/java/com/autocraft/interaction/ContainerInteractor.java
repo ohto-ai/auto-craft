@@ -25,8 +25,30 @@ public class ContainerInteractor {
         ClientPlayerEntity player = client.player;
         if (player == null || client.interactionManager == null) return;
 
-        Vec3d hit = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-        BlockHitResult result = new BlockHitResult(hit, Direction.UP, pos, false);
+        // Face the block from the player's position
+        Vec3d playerEye = player.getEyePos();
+        Vec3d blockCenter = pos.toCenterPos();
+        double dx = blockCenter.x - playerEye.x;
+        double dy = blockCenter.y - playerEye.y;
+        double dz = blockCenter.z - playerEye.z;
+
+        // Determine which face to hit
+        Direction face;
+        double absDx = Math.abs(dx), absDy = Math.abs(dy), absDz = Math.abs(dz);
+        if (absDx > absDz && absDx > absDy) {
+            face = dx > 0 ? Direction.WEST : Direction.EAST;
+        } else if (absDz > absDy) {
+            face = dz > 0 ? Direction.NORTH : Direction.SOUTH;
+        } else {
+            face = dy > 0 ? Direction.DOWN : Direction.UP;
+        }
+
+        Vec3d hitPos = new Vec3d(
+                pos.getX() + 0.5 + face.getOffsetX() * 0.5,
+                pos.getY() + 0.5 + face.getOffsetY() * 0.5,
+                pos.getZ() + 0.5 + face.getOffsetZ() * 0.5);
+
+        BlockHitResult result = new BlockHitResult(hitPos, face, pos, false);
         client.interactionManager.interactBlock(player, Hand.MAIN_HAND, result);
     }
 
