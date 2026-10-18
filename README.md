@@ -2,6 +2,10 @@
 
 纯客户端 Fabric Mod，自动化原版工作台合成操作，专为生电红石"合成站"设计。
 
+## 截图
+
+![AutoCraft 任务 HUD](docs/screenshots/autocraft-hud.webp)
+
 ## 支持的版本
 
 - **Minecraft 1.21**（当前构建目标）
