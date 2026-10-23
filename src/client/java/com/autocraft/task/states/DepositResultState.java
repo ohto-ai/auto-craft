@@ -1,20 +1,19 @@
 package com.autocraft.task.states;
 
 import com.autocraft.AutoCraftMod;
+import com.autocraft.config.ModConfig;
 import com.autocraft.interaction.ContainerInteractor;
-import com.autocraft.interaction.InventoryAnalyzer;
 import com.autocraft.recipe.CraftingRecipe;
 import com.autocraft.task.*;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
 import net.minecraft.util.math.BlockPos;
-import java.util.*;
 
 /**
  * Deposits crafted items into the output container.
  * If output is full, retries with timeout.
+ * Verification checks that items actually left the player's inventory.
  */
 public class DepositResultState implements TaskState {
 
@@ -22,11 +21,12 @@ public class DepositResultState implements TaskState {
     private Phase phase;
     private int tickInPhase;
     private int depositSlot;
-    private int depositedCount;
+    private int depositRetryCount; // prevent infinite retry on same slot
 
     @Override public void enter(CraftingTask ctx) {
         phase = Phase.OPENING;
         tickInPhase = 0;
+        depositRetryCount = 0;
         BlockPos out = ctx.getStation().getOutput();
         ContainerInteractor.openContainer(out);
     }
@@ -36,6 +36,8 @@ public class DepositResultState implements TaskState {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return StateResult.RETRY;
         ScreenHandler handler = client.player.currentScreenHandler;
+
+        ModConfig config = AutoCraftMod.getInstance().getConfig();
 
         switch (phase) {
             case OPENING:
@@ -54,7 +56,6 @@ public class DepositResultState implements TaskState {
                 // Find the crafted result item in player inventory
                 CraftingRecipe recipe = ctx.getRecipe();
                 String resultId = recipe.getResult().itemId;
-                int syncId = handler.syncId;
                 depositSlot = -1;
 
                 for (int i = handler.slots.size() - 36; i < handler.slots.size(); i++) {
@@ -75,6 +76,8 @@ public class DepositResultState implements TaskState {
                     return StateResult.RUNNING;
                 }
 
+                // Reset retry counter for this specific deposit
+                depositRetryCount = 0;
                 phase = Phase.DEPOSITING;
                 tickInPhase = 0;
                 return StateResult.RUNNING;
@@ -82,33 +85,52 @@ public class DepositResultState implements TaskState {
 
             case DEPOSITING:
                 if (tickInPhase == 1) {
+                    ItemStack stack = handler.slots.get(depositSlot).getStack();
+                    AutoCraftMod.LOGGER.info("Depositing {} x{} from slot {}",
+                            net.minecraft.registry.Registries.ITEM.getId(stack.getItem()),
+                            stack.getCount(), depositSlot);
                     ContainerInteractor.quickMove(handler.syncId, depositSlot);
                     return StateResult.RUNNING;
                 }
-                depositedCount++;
+                // Wait for click delay before verifying
+                if (tickInPhase <= config.getClickDelayTicks() + 1) {
+                    return StateResult.RUNNING;
+                }
                 phase = Phase.VERIFY;
                 tickInPhase = 1;
                 return StateResult.RUNNING;
 
             case VERIFY: {
-                // Check if output container is full by trying to find if the item is still in player inventory
-                if (tickInPhase > 3) {
-                    BlockPos out = ctx.getStation().getOutput();
-                    // Check if item is still there (output full?)
-                    boolean stillInInventory = false;
-                    for (int i = handler.slots.size() - 36; i < handler.slots.size(); i++) {
-                        ItemStack stack = handler.slots.get(i).getStack();
-                        if (!stack.isEmpty()) {
-                            String id = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString();
-                            if (id.equals(ctx.getRecipe().getResult().itemId)) {
-                                stillInInventory = true;
-                                break;
-                            }
+                // Wait for server to sync inventory state before checking
+                if (tickInPhase <= config.getVerifyWaitTicks()) {
+                    tickInPhase++;
+                    return StateResult.RUNNING;
+                }
+
+                BlockPos out = ctx.getStation().getOutput();
+                // Check if item is still in player inventory (deposit failed)
+                boolean stillInInventory = false;
+                int stillCount = 0;
+                for (int i = handler.slots.size() - 36; i < handler.slots.size(); i++) {
+                    ItemStack stack = handler.slots.get(i).getStack();
+                    if (!stack.isEmpty()) {
+                        String id = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString();
+                        if (id.equals(ctx.getRecipe().getResult().itemId)) {
+                            stillInInventory = true;
+                            stillCount += stack.getCount();
                         }
                     }
+                }
 
-                    if (stillInInventory) {
-                        // Output might be full
+                if (stillInInventory) {
+                    depositRetryCount++;
+                    AutoCraftMod.LOGGER.warn("Deposit verify failed: {} result items still in inventory (retry {}/{})",
+                            stillCount, depositRetryCount, config.getMaxVerifyRetries());
+
+                    // Check per-deposit retry limit
+                    if (depositRetryCount >= config.getMaxVerifyRetries()) {
+                        AutoCraftMod.LOGGER.warn("Deposit retry limit reached — checking if output is full");
+                        // Fall through to timeout check
                         RetryTracker tracker = ctx.getOrCreateRetryTracker(out);
                         if (!tracker.isActive()) tracker.start();
                         tracker.recordCheck();
@@ -117,18 +139,22 @@ public class DepositResultState implements TaskState {
                             ctx.stop("Output full — timeout");
                             return StateResult.STOPPED;
                         }
-                        // Retry deposit
+                        // Skip this slot for now, try to find another or move on
                         phase = Phase.FINDING_RESULT;
                         tickInPhase = 0;
                         return StateResult.RUNNING;
                     }
 
-                    // Success — reset tracker
-                    ctx.getOrCreateRetryTracker(out).reset();
-                    phase = Phase.DONE;
+                    // Retry deposit of this slot
+                    phase = Phase.DEPOSITING;
+                    tickInPhase = 0;
                     return StateResult.RUNNING;
                 }
-                tickInPhase++;
+
+                // Success — item left inventory
+                AutoCraftMod.LOGGER.info("Deposit verified: item moved to output container");
+                ctx.getOrCreateRetryTracker(out).reset();
+                phase = Phase.DONE;
                 return StateResult.RUNNING;
             }
 

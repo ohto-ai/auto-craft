@@ -1,6 +1,7 @@
 package com.autocraft.task.states;
 
 import com.autocraft.AutoCraftMod;
+import com.autocraft.config.ModConfig;
 import com.autocraft.interaction.ContainerInteractor;
 import com.autocraft.task.CraftingTask;
 import com.autocraft.task.TaskState;
@@ -12,19 +13,22 @@ import net.minecraft.screen.ScreenHandler;
  * Takes crafting results repeatedly until the grid is exhausted.
  * Shift-clicks the result slot, then checks if more results appear
  * (more materials remain in grid). Loops until grid is empty.
+ *
+ * Includes rate-limited clicks and verification that the result
+ * was actually taken before checking for more.
  */
 public class TakeResultState implements TaskState {
 
-    private enum Phase { WAIT_FIRST, TAKE, CHECK_MORE, CLOSE, DONE }
+    private enum Phase { WAIT_FIRST, TAKE, VERIFY_TAKE, CHECK_MORE, CLOSE, DONE }
     private Phase phase;
     private int tickInPhase;
-    private int timesTaken;
     private int batchSize;
+    private int takeRetryCount; // retry counter for failed takes
 
     @Override public void enter(CraftingTask ctx) {
         phase = Phase.WAIT_FIRST;
         tickInPhase = 0;
-        timesTaken = 0;
+        takeRetryCount = 0;
         var plan = ctx.getCurrentMaterialPlan();
         batchSize = plan != null ? plan.batchSize : 1;
     }
@@ -36,9 +40,12 @@ public class TakeResultState implements TaskState {
         ScreenHandler handler = client.player.currentScreenHandler;
         int syncId = handler.syncId;
 
+        ModConfig config = AutoCraftMod.getInstance().getConfig();
+
         switch (phase) {
             case WAIT_FIRST:
                 if (!handler.slots.get(0).getStack().isEmpty()) {
+                    AutoCraftMod.LOGGER.debug("Result appeared in output slot");
                     phase = Phase.TAKE;
                     tickInPhase = 0;
                     return StateResult.RUNNING;
@@ -51,20 +58,56 @@ public class TakeResultState implements TaskState {
                 return StateResult.RUNNING;
 
             case TAKE:
-                if (tickInPhase == 1) {
-                    ContainerInteractor.quickMove(syncId, 0);
+                // Wait for click delay before sending quickMove
+                if (tickInPhase <= config.getClickDelayTicks()) {
                     return StateResult.RUNNING;
                 }
-                timesTaken++;
+                ItemStack resultStack = handler.slots.get(0).getStack();
+                if (resultStack.isEmpty()) {
+                    // Result disappeared — grid may be exhausted
+                    phase = Phase.CHECK_MORE;
+                    tickInPhase = 0;
+                    return StateResult.RUNNING;
+                }
+                AutoCraftMod.LOGGER.debug("Taking result: {} x{}",
+                        net.minecraft.registry.Registries.ITEM.getId(resultStack.getItem()),
+                        resultStack.getCount());
+                ContainerInteractor.quickMove(syncId, 0);
+                takeRetryCount = 0;
+                phase = Phase.VERIFY_TAKE;
+                tickInPhase = 0;
+                return StateResult.RUNNING;
+
+            case VERIFY_TAKE:
+                // Wait for server to sync before checking if result was taken
+                if (tickInPhase <= config.getVerifyWaitTicks()) {
+                    return StateResult.RUNNING;
+                }
+                // Check if result slot is now empty (item was taken)
+                if (!handler.slots.get(0).getStack().isEmpty()) {
+                    takeRetryCount++;
+                    if (takeRetryCount < config.getMaxVerifyRetries()) {
+                        AutoCraftMod.LOGGER.warn("Result still in slot after take — retry {}/{}",
+                                takeRetryCount, config.getMaxVerifyRetries());
+                        phase = Phase.TAKE;
+                        tickInPhase = 0;
+                        return StateResult.RUNNING;
+                    }
+                    AutoCraftMod.LOGGER.warn("Result still in slot after {} retries — proceeding anyway",
+                            takeRetryCount);
+                } else {
+                    AutoCraftMod.LOGGER.debug("Result taken successfully");
+                }
                 phase = Phase.CHECK_MORE;
                 tickInPhase = 0;
                 return StateResult.RUNNING;
 
             case CHECK_MORE:
-                // Wait 2 ticks for server to update, then check if result slot has more
-                if (tickInPhase < 3) return StateResult.RUNNING;
+                // Wait for server to update, then check if result slot has more
+                if (tickInPhase < config.getVerifyWaitTicks()) return StateResult.RUNNING;
                 if (!handler.slots.get(0).getStack().isEmpty()) {
-                    phase = Phase.TAKE; // more results to take
+                    AutoCraftMod.LOGGER.debug("More results available — taking again");
+                    phase = Phase.TAKE;
                     tickInPhase = 0;
                     return StateResult.RUNNING;
                 }

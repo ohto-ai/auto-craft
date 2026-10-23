@@ -21,6 +21,11 @@ public class ModConfig {
     @Expose private int interactReachDistance = 5;
     @Expose private int batchInventoryHeadroom = 3;
 
+    // Rate limiting & verification
+    @Expose private int clickDelayTicks = 2;
+    @Expose private int verifyWaitTicks = 4;
+    @Expose private int maxVerifyRetries = 3;
+
     // --- Getters ---
 
     public int getRetryCheckIntervalMs() {
@@ -57,6 +62,18 @@ public class ModConfig {
 
     public int getBatchInventoryHeadroom() {
         return batchInventoryHeadroom;
+    }
+
+    public int getClickDelayTicks() {
+        return clickDelayTicks;
+    }
+
+    public int getVerifyWaitTicks() {
+        return verifyWaitTicks;
+    }
+
+    public int getMaxVerifyRetries() {
+        return maxVerifyRetries;
     }
 
     // --- Persistence ---

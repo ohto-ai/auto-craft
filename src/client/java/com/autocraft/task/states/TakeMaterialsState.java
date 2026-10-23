@@ -1,34 +1,42 @@
 package com.autocraft.task.states;
 
 import com.autocraft.AutoCraftMod;
+import com.autocraft.config.ModConfig;
 import com.autocraft.interaction.ContainerInteractor;
 import com.autocraft.task.*;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
 import net.minecraft.util.math.BlockPos;
 import java.util.*;
 
 /**
  * Opens the current input container, takes needed materials, moves to next.
  *
- * Phase order: ENTER → OPENING → GRAB → CHECK → NEXT or DONE
+ * Phase order: ENTER → OPENING → GRAB → VERIFY → NEXT or DONE
  *
  * ENTER:    Determine if we need anything. If not → workbench.
  * OPENING:  Right-click container, wait for HandledScreen.
- * GRAB:     For each needed item, shift-click its slot(s).
- * CHECK:    Verify items are in player inventory.
+ * GRAB:     For each needed item, shift-click ONE slot per tick (rate-limited).
+ * VERIFY:   Wait for server sync, re-scan container to confirm items were taken.
  * NEXT:     Close, advance index, loop to next container or done.
  */
 public class TakeMaterialsState implements TaskState {
 
-    private enum Phase { ENTER, OPENING, GRAB, CHECK, NEXT, DONE, WAIT_RETRY }
+    private enum Phase { ENTER, OPENING, GRAB, VERIFY, NEXT, DONE, WAIT_RETRY }
     private Phase phase;
     private int tickInPhase;
     private final List<String> needList = new ArrayList<>();
-    private int retryWaitTicks; // how many ticks to wait before retrying
+    private int retryWaitTicks;
+
+    // GRAB phase — rate-limited, one quickMove per tick
+    private int grabItemIdx;        // index into needList
+    private int grabDelayCounter;   // ticks to wait between quickMoves
+
+    // VERIFY phase
+    private int verifyWaitCounter;  // ticks to wait for server sync
+    private int verifyRetryCount;   // how many times we've retried
 
     @Override public void enter(CraftingTask ctx) {
         phase = Phase.ENTER;
@@ -43,6 +51,8 @@ public class TakeMaterialsState implements TaskState {
         int idx = ctx.getCurrentInputIndex();
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return StateResult.RETRY;
+
+        ModConfig config = AutoCraftMod.getInstance().getConfig();
 
         switch (phase) {
 
@@ -69,10 +79,12 @@ public class TakeMaterialsState implements TaskState {
                     AutoCraftMod.LOGGER.info("Container #{} opened, scanning...", idx);
                     phase = Phase.GRAB;
                     tickInPhase = 0;
+                    grabItemIdx = 0;
+                    grabDelayCounter = 0;
+                    verifyRetryCount = 0;
                     return StateResult.RUNNING;
                 }
                 if (tickInPhase > 40) {
-                    // Retry up to 3 times (6s total), then skip this container
                     if (retryWaitTicks++ >= 3) {
                         AutoCraftMod.LOGGER.warn("Container #{} won't open after {} retries — skipping", idx, retryWaitTicks);
                         retryWaitTicks = 0;
@@ -87,6 +99,12 @@ public class TakeMaterialsState implements TaskState {
                 return StateResult.RUNNING;
 
             case GRAB: {
+                // Wait for click delay between quickMoves
+                if (grabDelayCounter > 0) {
+                    grabDelayCounter--;
+                    return StateResult.RUNNING;
+                }
+
                 ScreenHandler handler = client.player.currentScreenHandler;
                 int syncId = handler.syncId;
                 int containerSize = handler.slots.size() - 36;
@@ -97,46 +115,125 @@ public class TakeMaterialsState implements TaskState {
                     return StateResult.RUNNING;
                 }
 
-                // For each needed item: find ALL matching stacks and shift-click them
-                // until the plan's need is met (or container runs out)
-                for (Iterator<String> it = needList.iterator(); it.hasNext(); ) {
-                    String itemId = it.next();
+                // Skip items no longer needed
+                while (grabItemIdx < needList.size()) {
+                    String itemId = needList.get(grabItemIdx);
                     int need = plan.needFromContainers.getOrDefault(itemId, 0);
-                    if (need <= 0) { it.remove(); continue; }
-
-                    int taken = 0;
-                    for (int si = 0; si < containerSize && taken < need; si++) {
-                        ItemStack stack = handler.slots.get(si).getStack();
-                        if (stack.isEmpty()) continue;
-                        String sid = Registries.ITEM.getId(stack.getItem()).toString();
-                        if (sid.equals(itemId)) {
-                            AutoCraftMod.LOGGER.info("Shift-click container slot {} → {} x{} (need {})",
-                                    si, itemId, stack.getCount(), need - taken);
-                            ContainerInteractor.quickMove(syncId, si);
-                            taken += stack.getCount();
-                        }
+                    if (need <= 0) {
+                        grabItemIdx++;
+                        continue;
                     }
-                    int remaining = need - taken;
-                    if (remaining <= 0) {
-                        plan.needFromContainers.remove(itemId);
-                        it.remove();
-                    } else {
-                        plan.needFromContainers.put(itemId, remaining);
+                    break;
+                }
+
+                if (grabItemIdx >= needList.size()) {
+                    // All item types processed — move to verification
+                    AutoCraftMod.LOGGER.info("GRAB pass complete — verifying...");
+                    phase = Phase.VERIFY;
+                    tickInPhase = 0;
+                    verifyWaitCounter = config.getVerifyWaitTicks();
+                    return StateResult.RUNNING;
+                }
+
+                // Process ONE quickMove for the current needed item
+                String itemId = needList.get(grabItemIdx);
+                int need = plan.needFromContainers.getOrDefault(itemId, 0);
+                boolean clicked = false;
+
+                // Scan container from the beginning each tick (handles item shifting after quickMove)
+                for (int si = 0; si < containerSize && !clicked; si++) {
+                    ItemStack stack = handler.slots.get(si).getStack();
+                    if (stack.isEmpty()) continue;
+                    String sid = Registries.ITEM.getId(stack.getItem()).toString();
+                    if (sid.equals(itemId)) {
+                        int count = stack.getCount();
+                        AutoCraftMod.LOGGER.info("Shift-click container slot {} → {} x{} (need {})",
+                                si, itemId, count, need);
+                        ContainerInteractor.quickMove(syncId, si);
+                        clicked = true;
+
+                        int remaining = need - count;
+                        if (remaining <= 0) {
+                            plan.needFromContainers.remove(itemId);
+                            grabItemIdx++; // move to next item type
+                        } else {
+                            plan.needFromContainers.put(itemId, remaining);
+                            // stay on same item for next tick (more stacks needed)
+                        }
                     }
                 }
 
-                phase = Phase.CHECK;
-                tickInPhase = 0;
+                if (!clicked) {
+                    // No more stacks of this item in the container
+                    AutoCraftMod.LOGGER.debug("No more {} in container #{}", itemId, idx);
+                    grabItemIdx++;
+                }
+
+                // Set delay before next quickMove
+                grabDelayCounter = config.getClickDelayTicks();
                 return StateResult.RUNNING;
             }
 
-            case CHECK: {
-                // Verify items in player inventory
+            case VERIFY: {
+                // Wait for server to sync inventory state
+                if (verifyWaitCounter > 0) {
+                    verifyWaitCounter--;
+                    return StateResult.RUNNING;
+                }
+
+                // Rebuild needList from plan
+                needList.clear();
+                needList.addAll(plan.needFromContainers.keySet());
+
+                // Re-scan container to see if items we still need are actually present
+                ScreenHandler handler = client.player.currentScreenHandler;
+                int containerSize = handler.slots.size() - 36;
+                int stillAvailable = 0;
+
+                for (String itemId : needList) {
+                    int need = plan.needFromContainers.getOrDefault(itemId, 0);
+                    if (need <= 0) continue;
+                    // Count how many of this item are still in the container
+                    int available = 0;
+                    for (int si = 0; si < containerSize; si++) {
+                        ItemStack stack = handler.slots.get(si).getStack();
+                        if (!stack.isEmpty()) {
+                            String sid = Registries.ITEM.getId(stack.getItem()).toString();
+                            if (sid.equals(itemId)) {
+                                available += stack.getCount();
+                            }
+                        }
+                    }
+                    if (available > 0) {
+                        stillAvailable += available;
+                        AutoCraftMod.LOGGER.info("Verify: {} still has {} x{} in container", itemId, available, itemId);
+                    }
+                }
+
+                if (stillAvailable > 0 && verifyRetryCount < config.getMaxVerifyRetries()) {
+                    verifyRetryCount++;
+                    AutoCraftMod.LOGGER.info("Verify: {} items still in container — retry {}/{}",
+                            stillAvailable, verifyRetryCount, config.getMaxVerifyRetries());
+                    phase = Phase.GRAB;
+                    tickInPhase = 0;
+                    grabItemIdx = 0;
+                    grabDelayCounter = config.getClickDelayTicks();
+                    return StateResult.RUNNING;
+                }
+
+                if (stillAvailable > 0) {
+                    AutoCraftMod.LOGGER.warn("Verify: {} items still in container after {} retries — giving up",
+                            stillAvailable, verifyRetryCount);
+                } else {
+                    AutoCraftMod.LOGGER.info("Verify: all items taken successfully");
+                }
+
                 int stillNeeded = 0;
                 for (var entry : plan.needFromContainers.entrySet()) {
                     stillNeeded += entry.getValue();
                 }
                 AutoCraftMod.LOGGER.info("After grab: {} items still needed from containers", stillNeeded);
+
                 ContainerInteractor.closeContainer();
                 phase = Phase.NEXT;
                 tickInPhase = 0;
@@ -157,7 +254,6 @@ public class TakeMaterialsState implements TaskState {
                 return StateResult.RUNNING;
 
             case WAIT_RETRY:
-                // Wait ~2 seconds between retry cycles
                 if (tickInPhase > 40) {
                     ctx.setCurrentInputIndex(0);
                     ctx.transitionTo(new NavigateToInputState());
@@ -172,7 +268,6 @@ public class TakeMaterialsState implements TaskState {
     }
 
     private StateResult handleExhausted(CraftingTask ctx) {
-        var plan = ctx.getCurrentMaterialPlan();
         var inputs = ctx.getStation().getInputs();
         BlockPos last = inputs.isEmpty() ? null : inputs.get(inputs.size() - 1);
         if (last != null) {
@@ -184,7 +279,6 @@ public class TakeMaterialsState implements TaskState {
                 return StateResult.STOPPED;
             }
         }
-        // Wait before retrying
         AutoCraftMod.LOGGER.info("All containers checked — waiting 2s before retry (check {})",
                 last != null ? ctx.getOrCreateRetryTracker(last).getCheckCount() : 0);
         phase = Phase.WAIT_RETRY;
